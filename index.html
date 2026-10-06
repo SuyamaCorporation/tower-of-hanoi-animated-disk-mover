@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tower of Hanoi Animated Disk Puzzle Solver</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    canvas { display: block; cursor: pointer; user-select: none; }
+    input[type=range] { accent-color: #f59e0b; }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col">
+  <header class="bg-orange-900 py-3 px-6 shadow-lg">
+    <h1 class="text-xl font-bold text-orange-100">Tower of Hanoi — Animated Puzzle Solver</h1>
+    <p class="text-xs text-orange-300">Manual mode or auto-solve with animation</p>
+  </header>
+
+  <main class="flex-1 flex flex-col items-center gap-4 p-4 max-w-4xl mx-auto w-full">
+    <!-- Controls row -->
+    <section class="w-full bg-gray-800 rounded-xl p-4 flex flex-wrap gap-4 items-center justify-between" aria-label="Game controls">
+      <div class="flex items-center gap-3 flex-wrap">
+        <label class="text-sm">
+          Disks:
+          <select id="diskCount" class="bg-gray-700 text-white rounded px-2 py-1 ml-1 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" aria-label="Number of disks">
+            <option value="3">3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+            <option value="6">6</option>
+          </select>
+        </label>
+        <button id="newGameBtn" class="bg-orange-600 hover:bg-orange-500 text-white font-semibold px-4 py-1.5 rounded transition" aria-label="New game">New Game</button>
+        <button id="autoSolveBtn" class="bg-green-700 hover:bg-green-600 text-white font-semibold px-4 py-1.5 rounded transition" aria-label="Auto solve">Auto-Solve</button>
+        <button id="stopBtn" class="bg-red-800 hover:bg-red-700 text-white font-semibold px-4 py-1.5 rounded transition hidden" aria-label="Stop auto solve">Stop</button>
+      </div>
+      <div class="flex items-center gap-3 flex-wrap text-sm">
+        <label>
+          Speed:
+          <input type="range" id="speedSlider" min="1" max="10" value="5" class="w-24 ml-1" aria-label="Animation speed" />
+          <span id="speedLabel" class="ml-1 text-orange-300">5</span>
+        </label>
+      </div>
+    </section>
+
+    <!-- Peg name customizer -->
+    <section class="w-full bg-gray-800 rounded-xl p-3 flex gap-4 flex-wrap text-sm" aria-label="Peg names">
+      <label>Peg A: <input type="text" id="pegAName" value="Source" maxlength="10" class="bg-gray-700 text-white rounded px-2 py-0.5 w-24 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-orange-400" aria-label="Peg A name" /></label>
+      <label>Peg B: <input type="text" id="pegBName" value="Spare" maxlength="10" class="bg-gray-700 text-white rounded px-2 py-0.5 w-24 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-orange-400" aria-label="Peg B name" /></label>
+      <label>Peg C: <input type="text" id="pegCName" value="Target" maxlength="10" class="bg-gray-700 text-white rounded px-2 py-0.5 w-24 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-orange-400" aria-label="Peg C name" /></label>
+    </section>
+
+    <!-- Stats -->
+    <div class="w-full flex gap-3 flex-wrap">
+      <div class="bg-gray-800 rounded-xl px-4 py-2 text-sm">Moves: <strong id="moveCount" class="text-orange-300">0</strong></div>
+      <div class="bg-gray-800 rounded-xl px-4 py-2 text-sm">Minimum: <strong id="minMoves" class="text-green-300">7</strong></div>
+      <div class="bg-gray-800 rounded-xl px-4 py-2 text-sm">Status: <strong id="statusMsg" class="text-yellow-300">Click a peg to select</strong></div>
+    </div>
+
+    <!-- Canvas -->
+    <canvas id="hanoiCanvas" width="760" height="280" class="w-full rounded-xl shadow-xl" role="img" aria-label="Tower of Hanoi puzzle board"></canvas>
+
+    <!-- Move history -->
+    <div class="w-full bg-gray-800 rounded-xl p-3">
+      <h2 class="text-xs font-semibold text-orange-300 uppercase tracking-wider mb-2">Move History</h2>
+      <div id="historyLog" class="text-xs font-mono text-gray-300 max-h-32 overflow-y-auto flex flex-col-reverse gap-0.5"></div>
+    </div>
+  </main>
+
+<script>
+const COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#a855f7'];
+let pegs = [[],[],[]];
+let diskCount = 3;
+let selected = null;
+let moves = 0;
+let solving = false;
+let solveQueue = [];
+let solveTimer = null;
+let animState = null; // {disk, fromPeg, toPeg, progress}
+
+const canvas = document.getElementById('hanoiCanvas');
+const ctx = canvas.getContext('2d');
+
+function newGame(n) {
+  diskCount = n || parseInt(document.getElementById('diskCount').value);
+  pegs = [[],[],[]];
+  for (let i = diskCount; i >= 1; i--) pegs[0].push(i);
+  moves = 0;
+  selected = null;
+  solving = false;
+  clearTimeout(solveTimer);
+  solveQueue = [];
+  animState = null;
+  document.getElementById('moveCount').textContent = 0;
+  document.getElementById('minMoves').textContent = Math.pow(2, diskCount) - 1;
+  document.getElementById('statusMsg').textContent = 'Click a peg to select';
+  document.getElementById('stopBtn').classList.add('hidden');
+  document.getElementById('autoSolveBtn').classList.remove('hidden');
+  clearHistory();
+  draw();
+}
+
+function clearHistory() {
+  document.getElementById('historyLog').innerHTML = '';
+}
+
+function logMove(from, to, disk) {
+  const names = getPegNames();
+  const log = document.getElementById('historyLog');
+  const entry = document.createElement('div');
+  entry.textContent = `#${moves} — Disk ${disk} from ${names[from]} → ${names[to]}`;
+  log.prepend(entry);
+}
+
+function getPegNames() {
+  return [
+    document.getElementById('pegAName').value || 'A',
+    document.getElementById('pegBName').value || 'B',
+    document.getElementById('pegCName').value || 'C',
+  ];
+}
+
+function pegX(i) {
+  const W = canvas.width;
+  return Math.round(W * [0.2, 0.5, 0.8][i]);
+}
+const BASE_Y = canvas.height - 28;
+const PEG_HEIGHT = canvas.height - 60;
+const DISK_HEIGHT = 18;
+const MIN_DISK_W = 28;
+const MAX_DISK_W_FRAC = 0.25;
+
+function diskWidth(d) {
+  const W = canvas.width;
+  return MIN_DISK_W + (d - 1) * (W * MAX_DISK_W_FRAC - MIN_DISK_W) / Math.max(1, diskCount - 1);
+}
+
+function diskY(pegIdx, stackPos) {
+  return BASE_Y - DISK_HEIGHT/2 - stackPos * (DISK_HEIGHT + 2);
+}
+
+function draw(animOverride) {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0,0,W,H);
+  // Background
+  const bg = ctx.createLinearGradient(0,0,0,H);
+  bg.addColorStop(0,'#111827'); bg.addColorStop(1,'#1f2937');
+  ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+
+  // Base platform
+  ctx.fillStyle='#78350f';
+  ctx.beginPath(); ctx.roundRect(20, BASE_Y+DISK_HEIGHT/2-4, W-40, 20, 6); ctx.fill();
+
+  const names = getPegNames();
+  for (let p=0;p<3;p++) {
+    const x = pegX(p);
+    // Peg rod
+    const grad = ctx.createLinearGradient(x-4,0,x+4,0);
+    grad.addColorStop(0,'#6b4c1a'); grad.addColorStop(0.5,'#c47c20'); grad.addColorStop(1,'#6b4c1a');
+    ctx.fillStyle=grad;
+    ctx.fillRect(x-5, BASE_Y-PEG_HEIGHT+DISK_HEIGHT/2, 10, PEG_HEIGHT);
+
+    // Peg label
+    ctx.fillStyle = selected===p ? '#fbbf24' : '#9ca3af';
+    ctx.font = `bold ${selected===p?14:12}px sans-serif`;
+    ctx.textAlign='center';
+    ctx.fillText(names[p], x, BASE_Y + DISK_HEIGHT/2 + 18);
+
+    // Highlight selected peg
+    if (selected===p) {
+      ctx.strokeStyle='#fbbf24';
+      ctx.lineWidth=2;
+      ctx.strokeRect(x-diskWidth(diskCount)/2-8, BASE_Y-PEG_HEIGHT+DISK_HEIGHT/2-4, diskWidth(diskCount)+16, PEG_HEIGHT+8);
+    }
+  }
+
+  // Draw disks
+  for (let p=0;p<3;p++) {
+    for (let s=0;s<pegs[p].length;s++) {
+      const d = pegs[p][s];
+      if (animOverride && animOverride.disk===d) continue;
+      drawDisk(d, pegX(p), diskY(p,s));
+    }
+  }
+
+  // Animated disk
+  if (animOverride) {
+    drawDisk(animOverride.disk, animOverride.cx, animOverride.cy);
+  }
+
+  ctx.textAlign='left';
+}
+
+function drawDisk(d, cx, cy) {
+  const w = diskWidth(d);
+  const h = DISK_HEIGHT;
+  const color = COLORS[(d-1) % COLORS.length];
+  const grd = ctx.createLinearGradient(cx-w/2, cy-h/2, cx-w/2, cy+h/2);
+  grd.addColorStop(0, lighten(color,40));
+  grd.addColorStop(0.5, color);
+  grd.addColorStop(1, darken(color,30));
+  ctx.fillStyle=grd;
+  ctx.strokeStyle='rgba(0,0,0,0.4)';
+  ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.roundRect(cx-w/2, cy-h/2, w, h, 5);
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
+  ctx.fillText(d, cx, cy+4);
+  ctx.textAlign='left';
+}
+
+function lighten(hex, amt) {
+  const n = parseInt(hex.slice(1),16);
+  const r=Math.min(255,((n>>16)&0xff)+amt), g=Math.min(255,((n>>8)&0xff)+amt), b=Math.min(255,(n&0xff)+amt);
+  return `rgb(${r},${g},${b})`;
+}
+function darken(hex, amt) { return lighten(hex,-amt); }
+
+function canMove(from, to) {
+  if (pegs[from].length===0) return false;
+  const top = pegs[from][pegs[from].length-1];
+  if (pegs[to].length===0) return true;
+  return top < pegs[to][pegs[to].length-1];
+}
+
+function performMove(from, to) {
+  const disk = pegs[from].pop();
+  pegs[to].push(disk);
+  moves++;
+  document.getElementById('moveCount').textContent = moves;
+  logMove(from, to, disk);
+  if (pegs[2].length===diskCount) {
+    document.getElementById('statusMsg').textContent = '🎉 Solved!';
+    solving=false;
+    document.getElementById('stopBtn').classList.add('hidden');
+    document.getElementById('autoSolveBtn').classList.remove('hidden');
+  }
+}
+
+function animateMove(from, to, onDone) {
+  const disk = pegs[from][pegs[from].length-1];
+  const startX = pegX(from), startY = diskY(from, pegs[from].length-1);
+  const endX   = pegX(to),   endY   = diskY(to, pegs[to].length);
+  const liftY  = BASE_Y - PEG_HEIGHT - 10;
+  const SPEED  = parseInt(document.getElementById('speedSlider').value);
+  const FRAMES = Math.max(4, 28 - SPEED*2);
+
+  let phase = 0; // 0=lift, 1=travel, 2=lower
+  let progress = 0;
+
+  function step() {
+    progress += 1/FRAMES;
+    if (progress > 1) { progress=0; phase++; }
+    let cx, cy;
+    if (phase===0) { cx=startX; cy=startY + (liftY-startY)*progress; }
+    else if (phase===1) { cx=startX + (endX-startX)*progress; cy=liftY; }
+    else if (phase===2) { cx=endX; cy=liftY + (endY-liftY)*progress; }
+    else { performMove(from,to); draw(); if(onDone) onDone(); return; }
+    draw({disk,cx,cy});
+    requestAnimationFrame(step);
+  }
+  step();
+}
+
+// Hanoi solver
+function hanoi(n, from, to, via, moveList) {
+  if (n===0) return;
+  hanoi(n-1, from, via, to, moveList);
+  moveList.push([from, to]);
+  hanoi(n-1, via, to, from, moveList);
+}
+
+function autoSolve() {
+  if (solving) return;
+  // Check if already solved
+  if (pegs[2].length===diskCount) { alert('Already solved! Start a new game.'); return; }
+  // Only works from start state
+  if (pegs[0].length!==diskCount) {
+    if (!confirm('Auto-solve works from the initial state. Reset to initial state?')) return;
+    newGame(diskCount);
+  }
+  solving=true;
+  solveQueue=[];
+  hanoi(diskCount, 0, 2, 1, solveQueue);
+  document.getElementById('stopBtn').classList.remove('hidden');
+  document.getElementById('autoSolveBtn').classList.add('hidden');
+  document.getElementById('statusMsg').textContent = 'Auto-solving…';
+  runNextMove();
+}
+
+function runNextMove() {
+  if (!solving || solveQueue.length===0) { solving=false; return; }
+  const [from, to] = solveQueue.shift();
+  animateMove(from, to, ()=>{
+    if (pegs[2].length===diskCount) {
+      document.getElementById('stopBtn').classList.add('hidden');
+      document.getElementById('autoSolveBtn').classList.remove('hidden');
+      return;
+    }
+    const SPEED = parseInt(document.getElementById('speedSlider').value);
+    const delay = Math.max(0, 200 - SPEED*15);
+    solveTimer = setTimeout(runNextMove, delay);
+  });
+}
+
+// Click on peg
+canvas.addEventListener('click', e=>{
+  if (solving) return;
+  const x = e.offsetX;
+  let clickedPeg = -1;
+  for (let p=0;p<3;p++) {
+    if (Math.abs(x-pegX(p)) < diskWidth(diskCount)/2+20) { clickedPeg=p; break; }
+  }
+  if (clickedPeg===-1) return;
+  if (selected===null) {
+    if (pegs[clickedPeg].length===0) { document.getElementById('statusMsg').textContent='Peg is empty. Pick another.'; return; }
+    selected=clickedPeg;
+    document.getElementById('statusMsg').textContent='Selected '+getPegNames()[clickedPeg]+' — click destination peg';
+    draw();
+  } else {
+    if (clickedPeg===selected) { selected=null; document.getElementById('statusMsg').textContent='Deselected. Click a peg to select.'; draw(); return; }
+    if (!canMove(selected, clickedPeg)) { document.getElementById('statusMsg').textContent='Illegal move! Can\'t place larger disk on smaller.'; return; }
+    const from=selected; selected=null;
+    animateMove(from, clickedPeg, ()=>{
+      if (pegs[2].length!==diskCount) document.getElementById('statusMsg').textContent='Click a peg to select';
+      draw();
+    });
+  }
+});
+
+document.getElementById('newGameBtn').addEventListener('click', ()=>newGame());
+document.getElementById('autoSolveBtn').addEventListener('click', autoSolve);
+document.getElementById('stopBtn').addEventListener('click', ()=>{
+  solving=false; clearTimeout(solveTimer);
+  document.getElementById('stopBtn').classList.add('hidden');
+  document.getElementById('autoSolveBtn').classList.remove('hidden');
+  document.getElementById('statusMsg').textContent='Stopped. Continue manually or press New Game.';
+});
+document.getElementById('speedSlider').addEventListener('input', e=>{
+  document.getElementById('speedLabel').textContent=e.target.value;
+});
+['pegAName','pegBName','pegCName'].forEach(id=>document.getElementById(id).addEventListener('input',draw));
+
+function resizeCanvas() {
+  canvas.width = Math.min(canvas.parentElement.clientWidth, 900);
+  draw();
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+newGame(3);
+</script>
+</body>
+</html>
